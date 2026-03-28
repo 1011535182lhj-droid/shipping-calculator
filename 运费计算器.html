@@ -1,0 +1,1636 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>包装箱规与运费计算器</title>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX (Pinned Version & Fixed) -->
+    <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js & React Three Fiber -->
+    <script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.2.0",
+          "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+          "three": "https://esm.sh/three@0.160.0",
+          "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.16?external=react,react-dom,three",
+          "@react-three/drei": "https://esm.sh/@react-three/drei@9.102.0?external=react,react-dom,three,@react-three/fiber"
+        }
+      }
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+            -webkit-appearance: none; 
+            margin: 0; 
+        }
+        .canvas-container {
+            background: radial-gradient(circle, #e0e7ff 0%, #cbd5e1 100%);
+        }
+        .btn-shine {
+            position: relative;
+            overflow: hidden;
+        }
+        .btn-shine::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shine 3s infinite;
+        }
+        @keyframes shine {
+            100% { left: 100%; }
+        }
+        /* Fullscreen styles */
+        .fullscreen-canvas {
+            position: fixed !important;
+            top: 0;
+            left: 0;
+            width: 100vw !important;
+            height: 100vh !important;
+            z-index: 9999;
+            border-radius: 0 !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module" data-presets="react">
+        import * as THREE from 'three';
+        import { Canvas } from '@react-three/fiber';
+        import { OrbitControls, Grid, Center, PerspectiveCamera } from '@react-three/drei';
+        import React, { useState, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+
+        // --- 3D Components ---
+        
+        const BoxMesh = ({ position, args, color }) => {
+            return (
+                <group position={position}>
+                    {/* 实心盒子 - 添加 polygonOffset 防止与边线重叠 */}
+                    <mesh>
+                        <boxGeometry args={args} />
+                        <meshStandardMaterial 
+                            color={color} 
+                            roughness={0.5} 
+                            polygonOffset 
+                            polygonOffsetFactor={1} 
+                            polygonOffsetUnits={1}
+                        />
+                    </mesh>
+                    {/* 黑色边框，增强立体感 - 颜色改为黑色，提高不透明度 */}
+                    <lineSegments>
+                        <edgesGeometry args={[new THREE.BoxGeometry(...args)]} />
+                        <lineBasicMaterial color="#000000" linewidth={1} opacity={0.6} transparent />
+                    </lineSegments>
+                </group>
+            );
+        };
+
+        const PackingScene = ({ layout }) => {
+            const { 
+                unitDims, // [长, 高, 宽] 
+                cartonDims, // [长, 高, 宽]
+                rows, // 长方向数量 (x)
+                cols, // 宽方向数量 (z)
+                stack, // 高方向数量 (y)
+                gap = 0.05 // 间隙
+            } = layout;
+
+            // 动态缩放比例，让物体始终处于合适的可视范围内
+            const maxDim = Math.max(cartonDims[0], cartonDims[1], cartonDims[2]);
+            const scale = maxDim > 0 ? 10 / maxDim : 0.1;
+            
+            const uW = unitDims[0] * scale; // X轴: 长
+            const uH = unitDims[1] * scale; // Y轴: 高
+            const uD = unitDims[2] * scale; // Z轴: 宽
+
+            const cW = cartonDims[0] * scale;
+            const cH = cartonDims[1] * scale;
+            const cD = cartonDims[2] * scale;
+
+            const boxes = [];
+            
+            const totalContentW = rows * uW;
+            const totalContentH = stack * uH;
+            const totalContentD = cols * uD;
+            
+            const startX = -totalContentW / 2 + uW / 2;
+            const startY = -totalContentH / 2 + uH / 2;
+            const startZ = -totalContentD / 2 + uD / 2;
+
+            if (rows > 0 && cols > 0 && stack > 0) {
+                let count = 0;
+                for (let i = 0; i < rows; i++) {
+                    for (let k = 0; k < cols; k++) {
+                        for (let j = 0; j < stack; j++) {
+                            count++;
+                            
+                            // 颜色逻辑：交替色增强区分度
+                            const isStacked = stack > 1; 
+                            const boxColor = isStacked 
+                                ? (j % 2 === 0 ? "#3b82f6" : "#93c5fd") 
+                                : "#3b82f6";
+
+                            // 极简剔除
+                            const isVisible = 
+                                i === 0 || i === rows - 1 ||
+                                j === 0 || j === stack - 1 ||
+                                k === 0 || k === cols - 1;
+
+                            if (rows * cols * stack > 1000 && !isVisible) continue;
+
+                            boxes.push(
+                                <BoxMesh 
+                                    key={`${i}-${j}-${k}`}
+                                    position={[
+                                        startX + i * uW, 
+                                        startY + j * uH, 
+                                        startZ + k * uD
+                                    ]} 
+                                    args={[uW - gap, uH - gap, uD - gap]}
+                                    color={boxColor}
+                                />
+                            );
+                        }
+                    }
+                }
+            } else {
+                 boxes.push(
+                    <BoxMesh 
+                        key="bulk"
+                        position={[0,0,0]} 
+                        args={[cW - 0.2, cH - 0.2, cD - 0.2]}
+                        color="#60a5fa"
+                    />
+                 )
+            }
+
+            return (
+                <>
+                    <ambientLight intensity={0.7} />
+                    <pointLight position={[10, 20, 10]} intensity={1} />
+                    <pointLight position={[-10, 10, 20]} intensity={0.8} />
+                    
+                    <Center>
+                        <group>
+                            {boxes}
+                            <mesh>
+                                <boxGeometry args={[cW, cH, cD]} />
+                                <meshBasicMaterial color="#ef4444" wireframe={true} transparent opacity={0.3} />
+                            </mesh>
+                             <mesh>
+                                <boxGeometry args={[cW, cH, cD]} />
+                                <meshBasicMaterial color="#ef4444" transparent opacity={0.05} depthWrite={false} />
+                            </mesh>
+                        </group>
+                    </Center>
+                    <Grid infiniteGrid sectionColor="#696969" cellColor="#a1a1a1" fadeDistance={40} position={[0, -cH/2 - 0.5, 0]} />
+                    <OrbitControls makeDefault autoRotate autoRotateSpeed={1} />
+                    <PerspectiveCamera makeDefault position={[10, 10, 10]} fov={45} />
+                </>
+            );
+        };
+
+        // --- Main Application ---
+
+        const InputField = ({ label, value, onChange, unit, step = "1", type="number" }) => (
+            <div className="flex flex-col">
+                <label className="text-xs font-semibold text-gray-500 mb-1">{label}</label>
+                <div className="relative">
+                    <input 
+                        type={type} 
+                        value={value} 
+                        onChange={(e) => onChange(parseFloat(e.target.value) || 0)} 
+                        step={step}
+                        className="w-full p-2 pr-8 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm"
+                    />
+                    <span className="absolute right-2 top-2 text-xs text-gray-400">{unit}</span>
+                </div>
+            </div>
+        );
+
+        const ResultItem = ({ label, value, unit, highlight = false, extraClass = "" }) => (
+            <div className={`p-3 rounded border ${highlight ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-100'} ${extraClass}`}>
+                <div className="text-xs text-gray-500">{label}</div>
+                <div className={`font-bold ${highlight ? 'text-blue-700 text-lg' : 'text-gray-800'}`}>
+                    {typeof value === 'number' ? value.toLocaleString(undefined, { maximumFractionDigits: 3 }) : value} 
+                    <span className="text-xs font-normal ml-1 text-gray-500">{unit}</span>
+                </div>
+            </div>
+        );
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('magnet');
+            const [isFullScreen, setIsFullScreen] = useState(false);
+            const [showSettings, setShowSettings] = useState(false);
+            const [copyFeedback, setCopyFeedback] = useState("");
+            const [language, setLanguage] = useState('zh');
+
+            /* const translations = {
+                zh: {
+                    appTitle: '包装箱规计算器',
+                    zhButton: '中文',
+                    enButton: 'EN',
+                    magnetTab: '不可折叠磁吸盒',
+                    airplaneTab: '飞机盒 (平铺)',
+                    foldableTab: '可折叠磁吸盒',
+                    cardTab: '卡盒',
+                    shippingMode: '运输方式:',
+                    seaMode: '海运 (/6000)',
+                    airMode: '空运/快递 (/5000)',
+                    basicDims: '基础尺寸 (CM)',
+                    basicDimsFold: '基础尺寸 (CM) - 折叠出货',
+                    materialParams: '材质参数',
+                    smartParams: '智能装箱参数',
+                    hideSettings: '隐藏设置',
+                    showSettings: '优化限制设置',
+                    startOptimize: '开始智能计算',
+                    length: '长',
+                    width: '宽',
+                    height: '高',
+                    quantity: '数量',
+                    paper: '面纸',
+                    board: '纸板',
+                    grossLimit: '单箱实重上限',
+                    volLimit: '单箱体积重上限',
+                    lengthLimit: '单箱长度上限',
+                    widthLimit: '单箱宽度上限',
+                    heightLimit: '单箱高度上限',
+                    minChargeable: '单箱计费重下限',
+                    perCarton: '单箱个数',
+                    rows: '排数',
+                    cols: '列数',
+                    perCartonFold: '单箱个数',
+                    rowsFold: '单箱排数',
+                    foldNote: '*注：此箱型为单列排布，仅支持调整排数(长)和堆叠层数(高)。',
+                    cardNote: '卡盒模式暂不支持详细内部堆叠可视化，仅显示外箱体积。',
+                    paperWeight: '面纸重',
+                    calcResults: '计算结果',
+                    copyInquiry: '复制询价单',
+                    copied: '已复制！',
+                    copyFailed: '复制失败',
+                    unitWeight: '单盒重',
+                    cartonGrossWeight: '单箱实重',
+                    cartonLength: '单箱长',
+                    cartonWidth: '单箱宽',
+                    cartonHeight: '单箱高',
+                    cartonCBM: '单箱立方',
+                    volWeightLabel: '体积重',
+                    cartonCount: '总箱数',
+                    totalVolume: '总体积',
+                    totalGrossWeight: '总实重',
+                    totalVolWeight: '总体积重',
+                    totalWeight: '总重量',
+                    boxCount: '箱数',
+                    totalWeightShort: '总重',
+                    totalChargeableWeight: '总计费重',
+                    visualPreview: '装箱可视化预览',
+                    inquirySize: '外箱尺寸',
+                    inquiryGross: '单箱实重',
+                    inquiryTotal: '总共木箱',
+                    inquiryAsk: '请报{mode}运费和时效。请给出计费重，谢谢。',
+                    seaQuote: '海运',
+                    airQuote: '空运/快递',
+                    noOptimizeCard: '卡盒计算方式固定，无需优化行列参数。',
+                    noPlanFound: '未找到满足限制条件的方案，请调整限制后重试。',
+                    belowMinAlert: '已为你显示当前限制下总计费重最小的方案，但单箱计费重仅 {chargeable}kg，低于下限 {min}kg。\n当前方案仍会回填到面板供你继续查看和调整。',
+                    optimizeDone: '优化完成！({mode}模式)\n最佳方案：{layout}\n单箱计费重：{chargeable}kg\n总计费重：{total}kg\n策略：先满足全部限制条件，再优先满足单箱计费重下限，最后取总计费重最小。',
+                    rowUnit: '列',
+                    colUnit: '行',
+                    boxUnit: '箱',
+                },
+                en: {
+                    appTitle: 'Packaging Carton Calculator',
+                    zhButton: '中文',
+                    enButton: 'EN',
+                    magnetTab: 'Rigid Magnetic Box',
+                    airplaneTab: 'Mailer Box (Flat)',
+                    foldableTab: 'Foldable Magnetic Box',
+                    cardTab: 'Card Box',
+                    shippingMode: 'Shipping Mode:',
+                    seaMode: 'Sea Freight (/6000)',
+                    airMode: 'Air/Express (/5000)',
+                    basicDims: 'Base Dimensions (CM)',
+                    basicDimsFold: 'Base Dimensions (CM) - Folded Shipment',
+                    materialParams: 'Material Parameters',
+                    smartParams: 'Smart Packing Parameters',
+                    hideSettings: 'Hide Settings',
+                    showSettings: 'Optimization Limits',
+                    startOptimize: 'Run Smart Calculation',
+                    length: 'Length',
+                    width: 'Width',
+                    height: 'Height',
+                    quantity: 'Quantity',
+                    paper: 'Paper',
+                    board: 'Board',
+                    grossLimit: 'Max Gross Weight / Carton',
+                    volLimit: 'Max Volumetric Weight / Carton',
+                    lengthLimit: 'Max Carton Length',
+                    widthLimit: 'Max Carton Width',
+                    heightLimit: 'Max Carton Height',
+                    minChargeable: 'Min Chargeable Weight / Carton',
+                    perCarton: 'Qty / Carton',
+                    rows: 'Rows',
+                    cols: 'Columns',
+                    perCartonFold: 'Qty / Carton',
+                    rowsFold: 'Rows / Carton',
+                    foldNote: '*This box type uses a single-column layout and only supports row (length) and stacking layer (height) adjustments.',
+                    cardNote: 'Card box mode does not currently support detailed internal stacking visualization; only the outer carton volume is shown.',
+                    paperWeight: 'Paper Weight',
+                    calcResults: 'Calculation Results',
+                    copyInquiry: 'Copy Inquiry',
+                    copied: 'Copied!',
+                    copyFailed: 'Copy failed',
+                    unitWeight: 'Unit Weight',
+                    cartonGrossWeight: 'Gross Weight / Carton',
+                    cartonLength: 'Carton Length',
+                    cartonWidth: 'Carton Width',
+                    cartonHeight: 'Carton Height',
+                    cartonCBM: 'Carton CBM',
+                    volWeightLabel: 'Volumetric Weight',
+                    cartonCount: 'Total Cartons',
+                    totalVolume: 'Total Volume',
+                    totalGrossWeight: 'Total Gross Weight',
+                    totalVolWeight: 'Total Volumetric Weight',
+                    totalWeight: 'Total Weight',
+                    boxCount: 'Cartons',
+                    totalWeightShort: 'Gross Total',
+                    totalChargeableWeight: 'Total Chargeable Weight',
+                    visualPreview: 'Packing Preview',
+                    inquirySize: 'Carton Size',
+                    inquiryGross: 'Gross Weight / Carton',
+                    inquiryTotal: 'Total',
+                    inquiryAsk: 'Please quote {mode} freight and transit time, and provide the chargeable weight. Thank you.',
+                    seaQuote: 'sea freight',
+                    airQuote: 'air/express',
+                    noOptimizeCard: 'Card box mode uses a fixed formula and does not require row/column optimization.',
+                    noPlanFound: 'No valid solution was found under the current limits. Please adjust the constraints and try again.',
+                    belowMinAlert: 'The lowest-total-chargeable solution under the current limits has been applied, but its chargeable weight per carton is only {chargeable}kg, below the minimum {min}kg.\nThe result is still shown on the panel for review and adjustment.',
+                    optimizeDone: 'Optimization completed! ({mode} mode)\nBest layout: {layout}\nChargeable weight / carton: {chargeable}kg\nTotal chargeable weight: {total}kg\nStrategy: satisfy all limits first, then prioritize the minimum chargeable weight threshold, and finally minimize total chargeable weight.',
+                    rowUnit: 'row',
+                    colUnit: 'col',
+                    boxUnit: 'boxes',
+                }
+            };
+
+            */
+            const i18n = {
+                zh: {
+                    appTitle: '\u5305\u88c5\u7bb1\u89c4\u8ba1\u7b97\u5668',
+                    zhButton: '\u4e2d\u6587',
+                    enButton: 'EN',
+                    copyInquiry: '\u590d\u5236\u8be2\u4ef7\u5355',
+                    copied: '\u5df2\u590d\u5236\uff01',
+                    copyFailed: '\u590d\u5236\u5931\u8d25',
+                    calcResults: '\u8ba1\u7b97\u7ed3\u679c',
+                    visualPreview: '\u88c5\u7bb1\u53ef\u89c6\u5316\u9884\u89c8',
+                    inquirySize: '\u5916\u7bb1\u5c3a\u5bf8',
+                    inquiryGross: '\u5355\u7bb1\u5b9e\u91cd',
+                    inquiryTotal: '\u603b\u5171\u6728\u7bb1',
+                    inquiryAsk: '\u8bf7\u62a5{mode}\u8fd0\u8d39\u548c\u65f6\u6548\u3002\u8bf7\u7ed9\u51fa\u8ba1\u8d39\u91cd\uff0c\u8c22\u8c22\u3002',
+                    seaQuote: '\u6d77\u8fd0',
+                    airQuote: '\u7a7a\u8fd0/\u5feb\u9012',
+                    totalWeightShort: '\u603b\u91cd',
+                    boxUnit: '\u7bb1',
+                },
+                en: {
+                    appTitle: 'Packaging Carton Calculator',
+                    zhButton: '中文',
+                    enButton: 'EN',
+                    magnetTab: 'Rigid Magnetic Box',
+                    airplaneTab: 'Mailer Box (Flat)',
+                    foldableTab: 'Foldable Magnetic Box',
+                    cardTab: 'Card Box',
+                    shippingMode: 'Shipping Mode:',
+                    seaMode: 'Sea Freight (/6000)',
+                    airMode: 'Air/Express (/5000)',
+                    basicDims: 'Base Dimensions (CM)',
+                    basicDimsFold: 'Base Dimensions (CM) - Folded Shipment',
+                    materialParams: 'Material Parameters',
+                    smartParams: 'Smart Packing Parameters',
+                    hideSettings: 'Hide Settings',
+                    showSettings: 'Optimization Limits',
+                    startOptimize: 'Run Smart Calculation',
+                    length: 'Length',
+                    width: 'Width',
+                    height: 'Height',
+                    quantity: 'Quantity',
+                    paper: 'Paper',
+                    board: 'Board',
+                    grossLimit: 'Max Gross Weight / Carton',
+                    volLimit: 'Max Volumetric Weight / Carton',
+                    lengthLimit: 'Max Carton Length',
+                    widthLimit: 'Max Carton Width',
+                    heightLimit: 'Max Carton Height',
+                    minChargeable: 'Min Chargeable Weight / Carton',
+                    perCarton: 'Qty / Carton',
+                    rows: 'Rows',
+                    cols: 'Columns',
+                    perCartonFold: 'Qty / Carton',
+                    rowsFold: 'Rows / Carton',
+                    foldNote: '*This box type uses a single-column layout and only supports row (length) and stacking layer (height) adjustments.',
+                    cardNote: 'Card box mode does not currently support detailed internal stacking visualization; only the outer carton volume is shown.',
+                    paperWeight: 'Paper Weight',
+                    calcResults: 'Calculation Results',
+                    copyInquiry: 'Copy Inquiry',
+                    copied: 'Copied!',
+                    copyFailed: 'Copy failed',
+                    unitWeight: 'Unit Weight',
+                    cartonGrossWeight: 'Gross Weight / Carton',
+                    cartonLength: 'Carton Length',
+                    cartonWidth: 'Carton Width',
+                    cartonHeight: 'Carton Height',
+                    cartonCBM: 'Carton CBM',
+                    volWeightLabel: 'Volumetric Weight',
+                    cartonCount: 'Total Cartons',
+                    totalVolume: 'Total Volume',
+                    totalGrossWeight: 'Total Gross Weight',
+                    totalVolWeight: 'Total Volumetric Weight',
+                    totalWeight: 'Total Weight',
+                    boxCount: 'Cartons',
+                    totalWeightShort: 'Gross Total',
+                    totalChargeableWeight: 'Total Chargeable Weight',
+                    visualPreview: 'Packing Preview',
+                    inquirySize: 'Carton Size',
+                    inquiryGross: 'Gross Weight / Carton',
+                    inquiryTotal: 'Total ',
+                    inquiryAsk: 'Please quote {mode} freight and transit time, and provide the chargeable weight. Thank you.',
+                    seaQuote: 'sea freight',
+                    airQuote: 'air/express',
+                    noOptimizeCard: 'Card box mode uses a fixed formula and does not require row/column optimization.',
+                    noPlanFound: 'No valid solution was found under the current limits. Please adjust the constraints and try again.',
+                    belowMinAlert: 'The lowest-total-chargeable solution under the current limits has been applied, but its chargeable weight per carton is only {chargeable}kg, below the minimum {min}kg.\\nThe result is still shown on the panel for review and adjustment.',
+                    optimizeDone: 'Optimization completed! ({mode} mode)\\nBest layout: {layout}\\nChargeable weight / carton: {chargeable}kg\\nTotal chargeable weight: {total}kg\\nStrategy: satisfy all limits first, then prioritize the minimum chargeable weight threshold, and finally minimize total chargeable weight.',
+                    rowUnit: 'row',
+                    colUnit: 'col',
+                    boxUnit: ' boxes',
+                },
+            };
+
+            const translations = {
+                zh: {
+                    appTitle: '包装箱规与运费计算器',
+                    zhButton: '中文',
+                    enButton: 'EN',
+                    magnetTab: '不可折叠磁吸盒',
+                    airplaneTab: '飞机盒（平铺）',
+                    foldableTab: '可折叠磁吸盒',
+                    cardTab: '卡盒',
+                    shippingMode: '运输方式：',
+                    seaMode: '海运/空运 (/6000)',
+                    airMode: '快递 (/5000)',
+                    seaModeName: '海运/空运',
+                    airModeName: '快递',
+                    basicDims: '基础尺寸 (CM)',
+                    basicDimsFold: '基础尺寸 (CM) - 折叠出货',
+                    materialParams: '材质参数',
+                    smartParams: '智能装箱参数',
+                    hideSettings: '隐藏设置',
+                    showSettings: '优化限制设置',
+                    startOptimize: '开始智能计算',
+                    length: '长',
+                    width: '宽',
+                    height: '高',
+                    quantity: '数量',
+                    paper: '面纸',
+                    board: '纸板',
+                    grossLimit: '单箱实重上限',
+                    volLimit: '单箱体积重上限',
+                    lengthLimit: '单箱长度上限',
+                    widthLimit: '单箱宽度上限',
+                    heightLimit: '单箱高度上限',
+                    minChargeable: '单箱计费重下限',
+                    perCarton: '单箱个数',
+                    rows: '排数',
+                    cols: '列数',
+                    perCartonFold: '单箱个数',
+                    rowsFold: '单箱排数',
+                    foldNote: '*注：此盒型为单列排布，仅支持调节排数和堆叠层数。',
+                    cardNote: '卡盒模式暂不支持详细内部堆叠可视化，仅显示外箱体积。',
+                    paperWeight: '面纸重',
+                    calcResults: '计算结果',
+                    copyInquiry: '复制询价单',
+                    copied: '已复制！',
+                    copyFailed: '复制失败',
+                    unitWeight: '单盒重',
+                    cartonGrossWeight: '单箱实重',
+                    cartonLength: '单箱长',
+                    cartonWidth: '单箱宽',
+                    airplaneLength: '飞机盒长',
+                    airplaneWidth: '飞机盒宽',
+                    cartonHeight: '单箱高',
+                    cartonCBM: '单箱立方',
+                    volWeightLabel: '体积重',
+                    cartonCount: '总箱数',
+                    totalVolume: '总体积',
+                    totalGrossWeight: '总实重',
+                    totalVolWeight: '总体积重',
+                    totalWeight: '总重量',
+                    boxCount: '箱数',
+                    totalWeightShort: '总重',
+                    totalChargeableWeight: '总计费重',
+                    visualPreview: '装箱可视化预览',
+                    previewLegend: '蓝色: 单品 | 红色: 外箱',
+                    fullscreenEnter: '全屏查看',
+                    fullscreenExit: '退出全屏',
+                    previewHint: '鼠标左键旋转 · 滚轮缩放',
+                    previewHintEsc: ' · ESC退出',
+                    inquirySize: '外箱尺寸',
+                    airplaneInquirySize: '飞机盒尺寸',
+                    inquiryGross: '单箱实重',
+                    inquiryTotal: '总共木箱',
+                    inquiryAsk: '请报{mode}运费和时效。请给出计费重，谢谢。',
+                    seaQuote: '海运/空运',
+                    airQuote: '快递',
+                    noOptimizeCard: '卡盒计算方式固定，无需优化行列参数。',
+                    noPlanFound: '未找到满足限制条件的方案，请调整限制后重试。',
+                    noPlanFoundDetailsIntro: '排查结果：',
+                    singleBoxFixedWidthMaxEdge: '单箱无论怎么排，单箱固定宽边 {value}cm 超过最大边 {limit}cm。',
+                    singleBoxMinLargestExceeded: '单箱无论怎么排，单箱最大边最低也要 {value}cm，超过最大边 {limit}cm。',
+                    singleBoxMinMiddleExceeded: '单箱无论怎么排，单箱次大边最低也要 {value}cm，超过次大边 {limit}cm。',
+                    singleBoxMinSmallestExceeded: '单箱无论怎么排，单箱最小边最低也要 {value}cm，超过最小边 {limit}cm。',
+                    singleBoxMinGrossExceeded: '单箱无论怎么排，单箱实重最低也要 {value}kg，超过单箱实重上限 {limit}kg。',
+                    singleBoxMinVolExceeded: '单箱无论怎么排，单箱体积重最低也要 {value}kg，超过单箱体积重上限 {limit}kg。',
+                    singleBoxNoPlanFallback: '单箱无论怎么排，现有限制条件下都无法同时满足尺寸、实重和体积重要求。',
+                    belowMinAlert: '已为你显示当前限制下总计费重最小的方案，但单箱计费重仅 {chargeable}kg，低于下限 {min}kg。\n当前方案仍会回填到面板供你继续查看和调整。',
+                    optimizeDone: '优化完成！（{mode}模式）\n最佳方案：{layout}\n单箱计费重：{chargeable}kg\n总计费重：{total}kg\n策略：先满足全部限制条件，再优先满足单箱计费重下限，最后取总计费重最小。',
+                    rowUnit: '排',
+                    colUnit: '列',
+                    boxUnit: '箱',
+                },
+                en: {
+                    appTitle: 'Packaging Carton Calculator',
+                    zhButton: '中文',
+                    enButton: 'EN',
+                    magnetTab: 'Rigid Magnetic Box',
+                    airplaneTab: 'Mailer Box (Flat)',
+                    foldableTab: 'Foldable Magnetic Box',
+                    cardTab: 'Card Box',
+                    shippingMode: 'Shipping Mode:',
+                    seaMode: 'Sea/Air Freight (/6000)',
+                    airMode: 'Express (/5000)',
+                    seaModeName: 'Sea/Air Freight',
+                    airModeName: 'Express',
+                    basicDims: 'Base Dimensions (CM)',
+                    basicDimsFold: 'Base Dimensions (CM) - Folded Shipment',
+                    materialParams: 'Material Parameters',
+                    smartParams: 'Smart Packing Parameters',
+                    hideSettings: 'Hide Settings',
+                    showSettings: 'Optimization Limits',
+                    startOptimize: 'Run Smart Calculation',
+                    length: 'Length',
+                    width: 'Width',
+                    height: 'Height',
+                    quantity: 'Quantity',
+                    paper: 'Paper',
+                    board: 'Board',
+                    grossLimit: 'Max Gross Weight / Carton',
+                    volLimit: 'Max Volumetric Weight / Carton',
+                    lengthLimit: 'Max Carton Length',
+                    widthLimit: 'Max Carton Width',
+                    heightLimit: 'Max Carton Height',
+                    minChargeable: 'Min Chargeable Weight / Carton',
+                    perCarton: 'Qty / Carton',
+                    rows: 'Rows',
+                    cols: 'Columns',
+                    perCartonFold: 'Qty / Carton',
+                    rowsFold: 'Rows / Carton',
+                    foldNote: '*This box type uses a single-column layout and only supports row (length) and stacking-layer (height) adjustments.',
+                    cardNote: 'Card box mode does not currently support detailed internal stacking visualization; only the outer carton volume is shown.',
+                    paperWeight: 'Paper Weight',
+                    calcResults: 'Calculation Results',
+                    copyInquiry: 'Copy Inquiry',
+                    copied: 'Copied!',
+                    copyFailed: 'Copy failed',
+                    unitWeight: 'Unit Weight',
+                    cartonGrossWeight: 'Gross Weight / Carton',
+                    cartonLength: 'Carton Length',
+                    cartonWidth: 'Carton Width',
+                    airplaneLength: 'Mailer Blank Length',
+                    airplaneWidth: 'Mailer Blank Width',
+                    cartonHeight: 'Carton Height',
+                    cartonCBM: 'Carton CBM',
+                    volWeightLabel: 'Volumetric Weight',
+                    cartonCount: 'Total Cartons',
+                    totalVolume: 'Total Volume',
+                    totalGrossWeight: 'Total Gross Weight',
+                    totalVolWeight: 'Total Volumetric Weight',
+                    totalWeight: 'Total Weight',
+                    boxCount: 'Cartons',
+                    totalWeightShort: 'Gross Total',
+                    totalChargeableWeight: 'Total Chargeable Weight',
+                    visualPreview: 'Packing Preview',
+                    previewLegend: 'Blue: Unit | Red: Carton',
+                    fullscreenEnter: 'Enter Fullscreen',
+                    fullscreenExit: 'Exit Fullscreen',
+                    previewHint: 'Left-drag to rotate · Wheel to zoom',
+                    previewHintEsc: ' · ESC to exit',
+                    inquirySize: 'Outer Carton Size',
+                    airplaneInquirySize: 'Mailer Blank Size',
+                    inquiryGross: 'Gross Weight / Carton',
+                    inquiryTotal: 'Total ',
+                    inquiryAsk: 'Please quote {mode} freight and transit time, and provide the chargeable weight. Thank you.',
+                    seaQuote: 'sea/air freight',
+                    airQuote: 'express',
+                    noOptimizeCard: 'Card box mode uses a fixed formula and does not require row/column optimization.',
+                    noPlanFound: 'No valid solution was found under the current limits. Please adjust the constraints and try again.',
+                    noPlanFoundDetailsIntro: 'Diagnosis:',
+                    singleBoxFixedWidthMaxEdge: 'No matter how the single carton is arranged, its fixed width {value}cm exceeds the maximum edge limit {limit}cm.',
+                    singleBoxMinLargestExceeded: 'No matter how the single carton is arranged, its largest edge cannot go below {value}cm, which exceeds the maximum edge limit {limit}cm.',
+                    singleBoxMinMiddleExceeded: 'No matter how the single carton is arranged, its second-largest edge cannot go below {value}cm, which exceeds the middle-edge limit {limit}cm.',
+                    singleBoxMinSmallestExceeded: 'No matter how the single carton is arranged, its smallest edge cannot go below {value}cm, which exceeds the smallest-edge limit {limit}cm.',
+                    singleBoxMinGrossExceeded: 'No matter how the single carton is arranged, its minimum gross weight is {value}kg, which exceeds the gross-weight limit {limit}kg.',
+                    singleBoxMinVolExceeded: 'No matter how the single carton is arranged, its minimum volumetric weight is {value}kg, which exceeds the volumetric-weight limit {limit}kg.',
+                    singleBoxNoPlanFallback: 'No matter how the single carton is arranged, the current limits cannot be satisfied at the same time for size, gross weight, and volumetric weight.',
+                    belowMinAlert: 'The lowest-total-chargeable solution under the current limits has been applied, but its chargeable weight per carton is only {chargeable}kg, below the minimum {min}kg.\nThe result is still shown on the panel for review and adjustment.',
+                    optimizeDone: 'Optimization completed! ({mode} mode)\nBest layout: {layout}\nChargeable weight / carton: {chargeable}kg\nTotal chargeable weight: {total}kg\nStrategy: satisfy all limits first, then prioritize the minimum chargeable weight threshold, and finally minimize total chargeable weight.',
+                    rowUnit: 'rows',
+                    colUnit: 'cols',
+                    boxUnit: ' boxes',
+                },
+            };
+
+            const t = (key) => translations[language]?.[key] || i18n[language]?.[key] || key;
+            const fieldLabel = (key, ref) => `${t(key)} (${ref})`;
+            const replaceTemplate = (template, values) =>
+                Object.entries(values).reduce((text, [token, value]) => text.replaceAll(`{${token}}`, value), template);
+            const getTabLabel = (tab) => ({
+                magnet: t('magnetTab'),
+                airplane: t('airplaneTab'),
+                foldable_magnet: t('foldableTab'),
+                card: t('cardTab'),
+            }[tab]);
+
+            useEffect(() => {
+                document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
+            }, [language]);
+
+            useEffect(() => {
+                const root = document.getElementById('root');
+                if (!root) return;
+                document.title = t('appTitle');
+
+                const tabButtons = root.querySelectorAll('.bg-gray-100.p-1.rounded-lg.overflow-x-auto button');
+                [t('magnetTab'), t('airplaneTab'), t('foldableTab'), t('cardTab')].forEach((label, index) => {
+                    if (tabButtons[index]) tabButtons[index].textContent = label;
+                });
+
+                const shippingBox = root.querySelector('.bg-blue-50.p-2.rounded-lg.border.border-blue-100');
+                if (shippingBox) {
+                    const shippingLabel = shippingBox.querySelector('span');
+                    const shippingButtons = shippingBox.querySelectorAll('button');
+                    if (shippingLabel) shippingLabel.textContent = t('shippingMode');
+                    if (shippingButtons[0]) shippingButtons[0].textContent = t('seaMode');
+                    if (shippingButtons[1]) shippingButtons[1].textContent = t('airMode');
+                }
+
+                const panels = root.querySelectorAll('.bg-white.rounded-xl.shadow-lg.p-6');
+                const inputPanel = panels[0];
+                const resultPanel = panels[1];
+
+                if (inputPanel) {
+                    const sectionHeaders = inputPanel.querySelectorAll('.col-span-2.text-sm.font-bold.text-gray-700.border-b.pb-1');
+                    const settingCards = inputPanel.querySelectorAll('.bg-white.p-3.rounded-lg.border.border-gray-200.shadow-sm');
+                    const noteEl = inputPanel.querySelector('.col-span-2.text-xs.text-gray-500.mt-1');
+                    const cardNoteEl = inputPanel.querySelector('.col-span-2.text-sm.text-yellow-600.bg-yellow-50.p-2.rounded');
+                    const inputLabels = inputPanel.querySelectorAll('label.text-xs.font-semibold.text-gray-500.mb-1');
+
+                    let headerTexts = [];
+                    let labelTexts = [];
+
+                    if (activeTab === 'magnet') {
+                        headerTexts = [t('basicDims'), t('smartParams')];
+                        labelTexts = [fieldLabel('length', 'A2'), fieldLabel('width', 'B2'), fieldLabel('height', 'C2'), fieldLabel('quantity', 'D2')];
+                        if (showSettings) {
+                            labelTexts.push(t('grossLimit'), t('volLimit'), t('lengthLimit'), t('widthLimit'), t('heightLimit'), t('minChargeable'));
+                        }
+                        labelTexts.push(t('perCarton'), t('rows'), t('cols'));
+                    } else if (activeTab === 'airplane') {
+                        headerTexts = [t('basicDims'), t('smartParams')];
+                        labelTexts = [fieldLabel('length', 'A11'), fieldLabel('width', 'B11'), fieldLabel('height', 'C11'), fieldLabel('quantity', 'D11')];
+                        if (showSettings) {
+                            labelTexts.push(t('grossLimit'), t('volLimit'), t('lengthLimit'), t('widthLimit'), t('heightLimit'), t('minChargeable'));
+                        }
+                        labelTexts.push(t('perCarton'), t('rows'), t('cols'));
+                    } else if (activeTab === 'foldable_magnet') {
+                        headerTexts = [t('basicDimsFold'), t('materialParams'), t('smartParams')];
+                        labelTexts = [fieldLabel('length', 'A2'), fieldLabel('width', 'B2'), fieldLabel('height', 'C2'), fieldLabel('quantity', 'D2'), fieldLabel('paper', 'E2'), fieldLabel('board', 'F2')];
+                        if (showSettings) {
+                            labelTexts.push(t('grossLimit'), t('volLimit'), t('lengthLimit'), t('widthLimit'), t('heightLimit'), t('minChargeable'));
+                        }
+                        labelTexts.push(fieldLabel('perCartonFold', 'G2'), fieldLabel('rowsFold', 'H2'));
+                    } else if (activeTab === 'card') {
+                        labelTexts = [fieldLabel('length', 'A19'), fieldLabel('width', 'B19'), fieldLabel('height', 'C19'), fieldLabel('quantity', 'D19'), t('paperWeight')];
+                    }
+
+                    sectionHeaders.forEach((el, index) => {
+                        if (headerTexts[index]) el.textContent = headerTexts[index];
+                    });
+
+                    inputLabels.forEach((el, index) => {
+                        if (labelTexts[index]) el.textContent = labelTexts[index];
+                    });
+
+                    settingCards.forEach((card) => {
+                        const buttons = card.querySelectorAll('.flex.gap-2 button');
+                        const title = card.querySelector('.text-sm.font-bold.text-gray-700');
+                        if (title) title.textContent = t('smartParams');
+                        if (buttons[0]) buttons[0].textContent = showSettings ? t('hideSettings') : t('showSettings');
+                        if (buttons[1]) buttons[1].textContent = t('startOptimize');
+                    });
+
+                    if (noteEl) noteEl.textContent = t('foldNote');
+                    if (cardNoteEl) cardNoteEl.textContent = t('cardNote');
+                }
+
+                if (resultPanel) {
+                    const title = resultPanel.querySelector('h2 span');
+                    const copyButton = resultPanel.querySelector('h2 button');
+                    const resultLabels = resultPanel.querySelectorAll('.p-3.rounded.border > div:first-child');
+                    if (title) title.textContent = t('calcResults');
+                    if (copyButton && copyButton.lastChild) {
+                        copyButton.lastChild.textContent = copyFeedback || t('copyInquiry');
+                    }
+
+                    let texts = [];
+                    if (activeTab === 'magnet') {
+                        texts = [t('unitWeight'), t('cartonGrossWeight'), t('cartonLength'), t('cartonWidth'), t('cartonHeight'), t('cartonCBM'), t('volWeightLabel'), t('cartonCount'), t('totalVolume'), t('totalGrossWeight'), t('totalVolWeight')];
+                    } else if (activeTab === 'airplane') {
+                        texts = [t('unitWeight'), t('cartonGrossWeight'), t('airplaneLength'), t('airplaneWidth'), t('cartonHeight'), t('cartonCBM'), t('volWeightLabel'), t('cartonCount'), t('totalVolume'), t('totalGrossWeight'), t('totalVolWeight')];
+                    } else if (activeTab === 'foldable_magnet') {
+                        texts = [t('unitWeight'), t('cartonGrossWeight'), t('cartonLength'), t('cartonWidth'), t('cartonHeight'), t('cartonCBM'), t('volWeightLabel'), t('cartonCount'), t('totalVolume'), t('totalGrossWeight'), t('totalVolWeight')];
+                    } else if (activeTab === 'card') {
+                        texts = [t('cartonLength'), t('cartonWidth'), t('totalWeight'), t('boxCount'), t('totalWeightShort'), t('totalChargeableWeight')];
+                    }
+
+                    resultLabels.forEach((el, index) => {
+                        if (texts[index]) el.textContent = texts[index];
+                    });
+                }
+
+                const previewTitle = root.querySelector('h3.font-bold.text-gray-700.flex.items-center.gap-2');
+                if (previewTitle && previewTitle.lastChild) {
+                    previewTitle.lastChild.textContent = t('visualPreview');
+                }
+            }, [language, activeTab, showSettings, copyFeedback]);
+            
+            // New State for Shipping Mode
+            const [shippingMode, setShippingMode] = useState('sea'); // 'sea' = sea/air (/6000), 'air' = express (/5000)
+
+            // --- Optimization Constraints State ---
+            const [constraints, setConstraints] = useState({
+                maxWeight: 21,
+                maxVolWeight: 21,
+                maxL: 100,
+                maxW: 70,
+                maxH: 60,
+                minChargeable: 12 // 新增：最低计费重限制
+            });
+
+            // --- State ---
+            // 1. 不可折叠磁吸盒
+            const [magInputs, setMagInputs] = useState({ L: 28, W: 22, H: 6, Qty: 500, Paper: 157, Board: 1200, PerCarton: 24, Rows: 2, Cols: 2 });
+            const [magResults, setMagResults] = useState({});
+
+            // 2. 飞机盒
+            const [airInputs, setAirInputs] = useState({ L: 28, W: 22, H: 6, Qty: 500, Paper: 157, Board: 250, PerCarton: 24, Rows: 2, Cols: 2 });
+            const [airResults, setAirResults] = useState({});
+
+            // 3. 卡盒
+            const [cardInputs, setCardInputs] = useState({ L: 0.305, W: 0.03, H: 0.305, Qty: 500, Paper: 0.4 });
+            const [cardResults, setCardResults] = useState({});
+
+            // 4. 可折叠磁吸盒 (Folded Shipment)
+            const [foldMagInputs, setFoldMagInputs] = useState({ 
+                L: 28, W: 22, H: 6, Qty: 500, 
+                Paper: 157, Board: 1200, 
+                PerCarton: 24, Rows: 2 
+            });
+            const [foldMagResults, setFoldMagResults] = useState({});
+
+            // Divisor logic
+            const volDivisor = shippingMode === 'air' ? 5000 : 6000;
+
+            // --- Logic ---
+            // 1. 不可折叠磁吸盒
+            useEffect(() => {
+                const { L, W, H, Qty, Paper, Board, PerCarton, Rows, Cols } = magInputs;
+                const safeRows = Rows || 1; 
+                const safeCols = Cols || 1;
+                const safePerCarton = PerCarton || 1;
+
+                const skinL = L;
+                const skinW = W * 2 + H * 3;
+                const innerArea = ((L * (W + 2 * H)) + W * H * 2) / 10000;
+                const innerWeight = (Paper * 2 + Board) * innerArea;
+                const skinWeight = ((skinL * skinW) / 10000) * (Paper * 2 + Board);
+                const unitWeight = innerWeight + skinWeight;
+                
+                const cartonGrossWeight = (PerCarton * unitWeight / 1000) + 1;
+                const cartonL = L * Rows + 4;
+                const cartonW = W * Cols + 4;
+                const cartonH = (PerCarton / safeRows / safeCols) * H + 4;
+                
+                const cartonCBM = (cartonL * cartonW * cartonH) / 1000000;
+                const volWeight = (cartonL * cartonW * cartonH) / volDivisor; // Use dynamic divisor
+                const cartonCount = Math.ceil(Qty / safePerCarton);
+
+                // Calculations for totals
+                const totalGrossWeight = cartonCount * cartonGrossWeight;
+                const totalVolWeight = cartonCount * volWeight;
+
+                setMagResults({ skinL, skinW, unitWeight, cartonGrossWeight, cartonL, cartonW, cartonH, cartonCBM, volWeight, cartonCount, totalVolume: cartonCBM * cartonCount, totalGrossWeight, totalVolWeight });
+            }, [magInputs, volDivisor]); // Re-run on mode change
+
+            // 2. 飞机盒
+            useEffect(() => {
+                const { L, W, H, Qty, Paper, Board, PerCarton, Rows, Cols } = airInputs;
+                const safePerCarton = PerCarton || 1;
+
+                const skinL = H * 3 + W * 2 + 4;
+                const skinW = L + H * 4 + 4;
+                const innerArea = ((L * (W + 2 * H)) + W * H * 2) / 10000;
+                const innerWeight = (Paper * 2 + Board) * innerArea;
+                const skinWeight = ((skinL * skinW) / 10000) * (Paper * 2 + Board);
+                const unitWeight = innerWeight + skinWeight;
+
+                const cartonGrossWeight = (PerCarton * unitWeight / 1000) + 1;
+                const cartonL = L * Rows + 4;
+                const cartonW = W * Cols + 4;
+                const cartonH = PerCarton * 0.3 + 4;
+
+                const cartonCBM = (cartonL * cartonW * cartonH) / 1000000;
+                // Specific formula: SkinL * SkinW * CartonH / divisor
+                const volWeight = (skinL * skinW * cartonH) / volDivisor; 
+                const cartonCount = Math.ceil(Qty / safePerCarton);
+
+                const totalGrossWeight = cartonCount * cartonGrossWeight;
+                const totalVolWeight = cartonCount * volWeight;
+
+                setAirResults({ skinL, skinW, unitWeight, cartonGrossWeight, cartonL, cartonW, cartonH, cartonCBM, volWeight, cartonCount, totalVolume: cartonCBM * cartonCount, totalGrossWeight, totalVolWeight });
+            }, [airInputs, volDivisor]);
+
+            // 3. 卡盒 (不受体积重除数影响，按实重)
+            useEffect(() => {
+                const { L, W, H, Qty, Paper } = cardInputs;
+                const cartonL = 2 * L + 2 * W;
+                const cartonW = H + 2 * W + 0.03; 
+                const totalWeightRaw = cartonL * cartonW * Paper * Qty; 
+                const cartonCount = Math.ceil(totalWeightRaw / 19);
+                const totalGrossWeight = cartonCount + totalWeightRaw; 
+                
+                // For card box, total vol weight is basically not calculated or same as gross in this specific formula context?
+                // User said "Calculated by real weight, not volume weight". 
+                // We will display totalGrossWeight in both places or hide vol weight? 
+                // Let's just set totalVolWeight to 0 or null to indicate N/A, or just equal to gross for display consistency if needed.
+                // But request says "Total Vol Weight and Total Gross Weight". Let's assume Card Box vol weight isn't relevant.
+                
+                setCardResults({ cartonL, cartonW, totalWeightRaw, cartonCount, totalGrossWeight });
+            }, [cardInputs]);
+
+            // 4. 可折叠磁吸盒
+            useEffect(() => {
+                const { L, W, H, Qty, Paper, Board, PerCarton, Rows } = foldMagInputs;
+                const safeRows = Rows || 1;
+                const safePerCarton = PerCarton || 1;
+                const boxThickness = 0.5;
+
+                const skinL = L;
+                const skinW = W * 2 + H * 3;
+                const sideArea = (W * H * 2) / 10000;
+                const linkArea = (H * 5 * 4) / 10000;
+                
+                const unitWeight = ((skinL * skinW) / 10000 + sideArea) * (Paper * 2 + Board) + linkArea * 700;
+                const cartonGrossWeight = (PerCarton * unitWeight / 1000) + 1;
+                
+                const cartonL = skinL * safeRows + 6;
+                const cartonW = skinW + 6;
+                const cartonH = (PerCarton * boxThickness / safeRows) + 6;
+                
+                const cartonCBM = (cartonL * cartonW * cartonH) / 1000000;
+                const volWeight = (cartonL * cartonW * cartonH) / volDivisor; // Dynamic divisor
+                const cartonCount = Math.ceil(Qty / safePerCarton);
+
+                const totalGrossWeight = cartonCount * cartonGrossWeight;
+                const totalVolWeight = cartonCount * volWeight;
+
+                setFoldMagResults({
+                    skinL, skinW, unitWeight,
+                    cartonGrossWeight, cartonL, cartonW, cartonH,
+                    cartonCBM, volWeight, cartonCount,
+                    totalVolume: cartonCBM * cartonCount, totalGrossWeight, totalVolWeight
+                });
+            }, [foldMagInputs, volDivisor]);
+
+
+            const handleCopy = () => {
+                let text = "";
+                const formatNum = (num) => typeof num === 'number' ? Number(num.toFixed(2)) : num;
+                const modeText = shippingMode === 'air' ? t('airQuote') : t('seaQuote');
+                const inquiryLine = replaceTemplate(t('inquiryAsk'), { mode: modeText });
+                const labelSeparator = language === 'en' ? ': ' : '：';
+                const sentenceEnd = language === 'en' ? '.\n' : '。\n';
+
+                const makeText = (res) =>
+                    `${t('inquirySize')}${labelSeparator}${formatNum(res.cartonL)}x${formatNum(res.cartonW)}x${formatNum(res.cartonH)}cm\n` +
+                    `${t('inquiryGross')}${labelSeparator}${formatNum(res.cartonGrossWeight)}kg\n` +
+                    `${t('inquiryTotal')}${res.cartonCount}${t('boxUnit')}${sentenceEnd}` +
+                    inquiryLine;
+
+                const makeAirplaneText = (res) =>
+                    `${t('airplaneInquirySize')}${labelSeparator}${formatNum(res.skinL)}x${formatNum(res.skinW)}x${formatNum(res.cartonH)}cm\n` +
+                    `${t('inquiryGross')}${labelSeparator}${formatNum(res.cartonGrossWeight)}kg\n` +
+                    `${t('inquiryTotal')}${res.cartonCount}${t('boxUnit')}${sentenceEnd}` +
+                    inquiryLine;
+
+                if (activeTab === 'magnet') text = makeText(magResults);
+                else if (activeTab === 'airplane') text = makeAirplaneText(airResults);
+                else if (activeTab === 'foldable_magnet') text = makeText(foldMagResults);
+                else {
+                    text =
+                        `${t('inquirySize')}${labelSeparator}${formatNum(cardResults.cartonL * 100)}x${formatNum(cardResults.cartonW * 100)}cm\n` +
+                        `${t('totalWeightShort')}${labelSeparator}${formatNum(cardResults.totalGrossWeight)}kg\n` +
+                        `${t('inquiryTotal')}${cardResults.cartonCount}${t('boxUnit')}${sentenceEnd}` +
+                        inquiryLine;
+                }
+
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    setCopyFeedback(t('copied'));
+                    setTimeout(() => setCopyFeedback(""), 2000);
+                } catch (err) {
+                    setCopyFeedback(t('copyFailed'));
+                }
+                document.body.removeChild(textArea);
+            };
+
+            const handleOptimize = () => {
+                if (activeTab === 'card') {
+                    alert(t('noOptimizeCard'));
+                    return;
+                }
+
+                const { maxWeight, maxVolWeight, maxL, maxW, maxH, minChargeable } = constraints;
+                const modeText = shippingMode === 'sea' ? t('seaModeName') : t('airModeName');
+                const sortedLimits = [maxL, maxW, maxH].sort((a, b) => b - a);
+                const maxEdgeLimit = sortedLimits[0];
+                const formatMetric = (value) => Number(value.toFixed(3));
+
+                let bestQualified = null;
+                let bestFallback = null;
+                const diagnosticStats = {
+                    minLargestEdge: Infinity,
+                    minMiddleEdge: Infinity,
+                    minSmallestEdge: Infinity,
+                    minGrossWeight: Infinity,
+                    minVolWeight: Infinity,
+                };
+
+                const isBetterCandidate = (candidate, currentBest) => {
+                    if (!currentBest) return true;
+                    if (candidate.totalChargeable < currentBest.totalChargeable - 0.001) return true;
+                    if (Math.abs(candidate.totalChargeable - currentBest.totalChargeable) < 0.001) {
+                        if (candidate.config.PerCarton > currentBest.config.PerCarton) return true;
+                        if (
+                            candidate.config.PerCarton === currentBest.config.PerCarton &&
+                            candidate.cartonCBM < currentBest.cartonCBM - 0.000001
+                        ) {
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+
+                const updateDiagnosticStats = (result) => {
+                    const sortedDims = [result.cartonL, result.cartonW, result.cartonH].sort((a, b) => b - a);
+                    diagnosticStats.minLargestEdge = Math.min(diagnosticStats.minLargestEdge, sortedDims[0]);
+                    diagnosticStats.minMiddleEdge = Math.min(diagnosticStats.minMiddleEdge, sortedDims[1]);
+                    diagnosticStats.minSmallestEdge = Math.min(diagnosticStats.minSmallestEdge, sortedDims[2]);
+                    diagnosticStats.minGrossWeight = Math.min(diagnosticStats.minGrossWeight, result.cartonGrossWeight);
+                    diagnosticStats.minVolWeight = Math.min(diagnosticStats.minVolWeight, result.volWeight);
+                };
+
+                const buildNoPlanMessage = () => {
+                    const reasons = [];
+                    let hasLargestEdgeReason = false;
+
+                    if (activeTab === 'foldable_magnet') {
+                        const fixedWidth = foldMagInputs.W * 2 + foldMagInputs.H * 3 + 6;
+                        if (fixedWidth > sortedLimits[0] + 0.001) {
+                            reasons.push(replaceTemplate(t('singleBoxFixedWidthMaxEdge'), {
+                                value: formatMetric(fixedWidth),
+                                limit: formatMetric(sortedLimits[0]),
+                            }));
+                            hasLargestEdgeReason = true;
+                        }
+                    }
+
+                    if (!hasLargestEdgeReason && diagnosticStats.minLargestEdge > sortedLimits[0] + 0.001) {
+                        reasons.push(replaceTemplate(t('singleBoxMinLargestExceeded'), {
+                            value: formatMetric(diagnosticStats.minLargestEdge),
+                            limit: formatMetric(sortedLimits[0]),
+                        }));
+                    }
+
+                    if (diagnosticStats.minMiddleEdge > sortedLimits[1] + 0.001) {
+                        reasons.push(replaceTemplate(t('singleBoxMinMiddleExceeded'), {
+                            value: formatMetric(diagnosticStats.minMiddleEdge),
+                            limit: formatMetric(sortedLimits[1]),
+                        }));
+                    }
+
+                    if (diagnosticStats.minSmallestEdge > sortedLimits[2] + 0.001) {
+                        reasons.push(replaceTemplate(t('singleBoxMinSmallestExceeded'), {
+                            value: formatMetric(diagnosticStats.minSmallestEdge),
+                            limit: formatMetric(sortedLimits[2]),
+                        }));
+                    }
+
+                    if (diagnosticStats.minGrossWeight > maxWeight + 0.001) {
+                        reasons.push(replaceTemplate(t('singleBoxMinGrossExceeded'), {
+                            value: formatMetric(diagnosticStats.minGrossWeight),
+                            limit: formatMetric(maxWeight),
+                        }));
+                    }
+
+                    if (diagnosticStats.minVolWeight > maxVolWeight + 0.001) {
+                        reasons.push(replaceTemplate(t('singleBoxMinVolExceeded'), {
+                            value: formatMetric(diagnosticStats.minVolWeight),
+                            limit: formatMetric(maxVolWeight),
+                        }));
+                    }
+
+                    if (!reasons.length) {
+                        reasons.push(t('singleBoxNoPlanFallback'));
+                    }
+
+                    return `${t('noPlanFound')}\n${t('noPlanFoundDetailsIntro')}\n${reasons.map((reason, index) => `${index + 1}. ${reason}`).join('\n')}`;
+                };
+
+                const calculateMagnetResult = (inputs) => {
+                    const { L, W, H, Qty, Paper, Board, PerCarton, Rows, Cols } = inputs;
+                    const safeRows = Rows || 1;
+                    const safeCols = Cols || 1;
+                    const safePerCarton = PerCarton || 1;
+
+                    const skinL = L;
+                    const skinW = W * 2 + H * 3;
+                    const innerArea = ((L * (W + 2 * H)) + W * H * 2) / 10000;
+                    const innerWeight = (Paper * 2 + Board) * innerArea;
+                    const skinWeight = ((skinL * skinW) / 10000) * (Paper * 2 + Board);
+                    const unitWeight = innerWeight + skinWeight;
+
+                    const cartonGrossWeight = (PerCarton * unitWeight / 1000) + 1;
+                    const cartonL = L * Rows + 4;
+                    const cartonW = W * Cols + 4;
+                    const cartonH = (PerCarton / safeRows / safeCols) * H + 4;
+                    const cartonCBM = (cartonL * cartonW * cartonH) / 1000000;
+                    const volWeight = (cartonL * cartonW * cartonH) / volDivisor;
+                    const cartonCount = Math.ceil(Qty / safePerCarton);
+                    const singleBoxChargeable = Math.max(cartonGrossWeight, volWeight);
+                    const totalChargeable = cartonCount * singleBoxChargeable;
+
+                    return {
+                        cartonL, cartonW, cartonH, cartonCBM, cartonGrossWeight, volWeight,
+                        singleBoxChargeable, totalChargeable
+                    };
+                };
+
+                const calculateAirplaneResult = (inputs) => {
+                    const { L, W, H, Qty, Paper, Board, PerCarton, Rows, Cols } = inputs;
+                    const safePerCarton = PerCarton || 1;
+
+                    const skinL = H * 3 + W * 2 + 4;
+                    const skinW = L + H * 4 + 4;
+                    const innerArea = ((L * (W + 2 * H)) + W * H * 2) / 10000;
+                    const innerWeight = (Paper * 2 + Board) * innerArea;
+                    const skinWeight = ((skinL * skinW) / 10000) * (Paper * 2 + Board);
+                    const unitWeight = innerWeight + skinWeight;
+
+                    const cartonGrossWeight = (PerCarton * unitWeight / 1000) + 1;
+                    const cartonL = L * Rows + 4;
+                    const cartonW = W * Cols + 4;
+                    const cartonH = PerCarton * 0.3 + 4;
+                    const cartonCBM = (cartonL * cartonW * cartonH) / 1000000;
+                    const volWeight = (skinL * skinW * cartonH) / volDivisor;
+                    const cartonCount = Math.ceil(Qty / safePerCarton);
+                    const singleBoxChargeable = Math.max(cartonGrossWeight, volWeight);
+                    const totalChargeable = cartonCount * singleBoxChargeable;
+
+                    return {
+                        cartonL, cartonW, cartonH, cartonCBM, cartonGrossWeight, volWeight,
+                        singleBoxChargeable, totalChargeable
+                    };
+                };
+
+                const calculateFoldMagResult = (inputs) => {
+                    const { L, W, H, Qty, Paper, Board, PerCarton, Rows } = inputs;
+                    const safeRows = Rows || 1;
+                    const safePerCarton = PerCarton || 1;
+                    const boxThickness = 0.5;
+
+                    const skinL = L;
+                    const skinW = W * 2 + H * 3;
+                    const sideArea = (W * H * 2) / 10000;
+                    const linkArea = (H * 5 * 4) / 10000;
+                    const unitWeight = ((skinL * skinW) / 10000 + sideArea) * (Paper * 2 + Board) + linkArea * 700;
+
+                    const cartonGrossWeight = (PerCarton * unitWeight / 1000) + 1;
+                    const cartonL = skinL * safeRows + 6;
+                    const cartonW = skinW + 6;
+                    const cartonH = (PerCarton * boxThickness / safeRows) + 6;
+                    const cartonCBM = (cartonL * cartonW * cartonH) / 1000000;
+                    const volWeight = (cartonL * cartonW * cartonH) / volDivisor;
+                    const cartonCount = Math.ceil(Qty / safePerCarton);
+                    const singleBoxChargeable = Math.max(cartonGrossWeight, volWeight);
+                    const totalChargeable = cartonCount * singleBoxChargeable;
+
+                    return {
+                        cartonL, cartonW, cartonH, cartonCBM, cartonGrossWeight, volWeight,
+                        singleBoxChargeable, totalChargeable
+                    };
+                };
+
+                const evaluateCandidate = (result, config) => {
+                    const sortedDims = [result.cartonL, result.cartonW, result.cartonH].sort((a, b) => b - a);
+                    updateDiagnosticStats(result);
+                    const fitsConstraints =
+                        sortedDims[0] <= sortedLimits[0] &&
+                        sortedDims[1] <= sortedLimits[1] &&
+                        sortedDims[2] <= sortedLimits[2] &&
+                        result.cartonGrossWeight <= maxWeight &&
+                        result.volWeight <= maxVolWeight;
+
+                    if (!fitsConstraints) return;
+
+                    const candidate = { ...result, config };
+
+                    if (isBetterCandidate(candidate, bestFallback)) {
+                        bestFallback = candidate;
+                    }
+
+                    if (candidate.singleBoxChargeable >= minChargeable && isBetterCandidate(candidate, bestQualified)) {
+                        bestQualified = candidate;
+                    }
+                };
+
+                if (activeTab === 'foldable_magnet') {
+                    const { L } = foldMagInputs;
+                    const safeMaxR = Math.max(1, Math.floor((maxEdgeLimit - 6) / L));
+                    const safeMaxS = Math.max(1, Math.floor((maxEdgeLimit - 6) / 0.5));
+
+                    for (let r = 1; r <= safeMaxR; r++) {
+                        for (let s = 1; s <= safeMaxS; s++) {
+                            const count = r * s;
+                            if (count === 0) continue;
+
+                            const tempInputs = { ...foldMagInputs, PerCarton: count, Rows: r };
+                            evaluateCandidate(calculateFoldMagResult(tempInputs), { PerCarton: count, Rows: r });
+                        }
+                    }
+                } else if (activeTab === 'magnet') {
+                    const { L, W, H } = magInputs;
+                    const safeMaxR = Math.max(1, Math.floor((maxEdgeLimit - 4) / L));
+                    const safeMaxC = Math.max(1, Math.floor((maxEdgeLimit - 4) / W));
+                    const safeMaxS = Math.max(1, Math.floor((maxEdgeLimit - 4) / H));
+
+                    for (let r = 1; r <= safeMaxR; r++) {
+                        for (let c = 1; c <= safeMaxC; c++) {
+                            for (let s = 1; s <= safeMaxS; s++) {
+                                const count = r * c * s;
+                                if (count === 0) continue;
+
+                                const tempInputs = { ...magInputs, PerCarton: count, Rows: r, Cols: c };
+                                evaluateCandidate(calculateMagnetResult(tempInputs), { PerCarton: count, Rows: r, Cols: c });
+                            }
+                        }
+                    }
+                } else if (activeTab === 'airplane') {
+                    const { L, W } = airInputs;
+                    const safeMaxR = Math.max(1, Math.floor((maxEdgeLimit - 4) / L));
+                    const safeMaxC = Math.max(1, Math.floor((maxEdgeLimit - 4) / W));
+                    const safeMaxCountH = Math.max(1, Math.floor((maxEdgeLimit - 4) / 0.3));
+
+                    for (let r = 1; r <= safeMaxR; r++) {
+                        for (let c = 1; c <= safeMaxC; c++) {
+                            const maxLayers = Math.floor(safeMaxCountH / (r * c));
+                            for (let layers = 1; layers <= maxLayers; layers++) {
+                                const count = r * c * layers;
+                                if (count === 0) continue;
+
+                                const tempInputs = { ...airInputs, PerCarton: count, Rows: r, Cols: c };
+                                evaluateCandidate(calculateAirplaneResult(tempInputs), { PerCarton: count, Rows: r, Cols: c });
+                            }
+                        }
+                    }
+                }
+
+                const selected = bestQualified || bestFallback;
+                if (!selected) {
+                    alert(buildNoPlanMessage());
+                    return;
+                }
+
+                if (activeTab === 'foldable_magnet') {
+                    setFoldMagInputs(prev => ({ ...prev, ...selected.config }));
+                } else if (activeTab === 'magnet') {
+                    setMagInputs(prev => ({ ...prev, ...selected.config }));
+                } else if (activeTab === 'airplane') {
+                    setAirInputs(prev => ({ ...prev, ...selected.config }));
+                }
+
+                if (selected.singleBoxChargeable < minChargeable) {
+                    alert(replaceTemplate(t('belowMinAlert'), {
+                        chargeable: selected.singleBoxChargeable.toFixed(2),
+                        min: minChargeable,
+                    }));
+                    return;
+                }
+
+                const layoutText = activeTab === 'foldable_magnet'
+                    ? (language === 'en'
+                        ? `${selected.config.PerCarton} pcs/carton (${selected.config.Rows} ${t('rowUnit')})`
+                        : `${selected.config.PerCarton}个/箱 (${selected.config.Rows}${t('rowUnit')})`)
+                    : (language === 'en'
+                        ? `${selected.config.PerCarton} pcs/carton (${selected.config.Rows} x ${selected.config.Cols})`
+                        : `${selected.config.PerCarton}个/箱 (${selected.config.Rows}x${selected.config.Cols})`);
+
+                alert(replaceTemplate(t('optimizeDone'), {
+                    mode: modeText,
+                    layout: layoutText,
+                    chargeable: selected.singleBoxChargeable.toFixed(2),
+                    total: selected.totalChargeable.toFixed(2),
+                }));
+            };
+
+            const getVisualLayout = () => {
+                if (activeTab === 'magnet') {
+                    const rows = magInputs.Rows || 1;
+                    const cols = magInputs.Cols || 1;
+                    const count = magInputs.PerCarton || 1;
+                    const stack = Math.ceil(count / (rows * cols));
+                    return {
+                        unitDims: [magInputs.L, magInputs.H, magInputs.W],
+                        cartonDims: [magResults.cartonL || 10, magResults.cartonH || 10, magResults.cartonW || 10],
+                        rows, cols, stack
+                    };
+                } else if (activeTab === 'airplane') {
+                    const rows = airInputs.Rows || 1;
+                    const cols = airInputs.Cols || 1;
+                    const count = airInputs.PerCarton || 1;
+                    const stack = Math.ceil(count / (rows * cols));
+                    return {
+                        unitDims: [airInputs.L, 0.3, airInputs.W], 
+                        cartonDims: [airResults.cartonL || 10, airResults.cartonH || 10, airResults.cartonW || 10],
+                        rows, cols, stack
+                    };
+                } else if (activeTab === 'foldable_magnet') {
+                    const rows = foldMagInputs.Rows || 1;
+                    const count = foldMagInputs.PerCarton || 1;
+                    const stack = Math.ceil(count / rows); 
+                    return {
+                        unitDims: [foldMagInputs.L, 0.5, foldMagResults.skinW || 20], 
+                        cartonDims: [foldMagResults.cartonL || 10, foldMagResults.cartonH || 10, foldMagResults.cartonW || 10],
+                        rows, cols: 1, stack
+                    };
+                } else {
+                    return {
+                        unitDims: [0,0,0], 
+                        cartonDims: [(cardResults.cartonL || 0.5) * 100, 20, (cardResults.cartonW || 0.5) * 100],
+                        rows: 0, cols: 0, stack: 0
+                    };
+                }
+            };
+
+            const layoutData = getVisualLayout();
+
+            return (
+                <div className="min-h-screen flex flex-col md:flex-row max-w-7xl mx-auto p-4 gap-4">
+                    
+                    {/* Left Panel: Inputs & Results */}
+                    <div className="w-full md:w-1/2 flex flex-col gap-4">
+                        <div className="bg-white rounded-xl shadow-lg p-6">
+                            <div className="text-2xl font-bold text-gray-800 mb-4 flex items-center gap-2">{t('appTitle')}</div>
+                            <h1 className="hidden text-2xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-package"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22v-9"/></svg>
+                                包装箱规计算器
+                            </h1>
+                            <div className="mb-4 flex justify-end gap-2">
+                                <button onClick={() => setLanguage('zh')} className={`px-3 py-1 rounded text-sm border ${language === 'zh' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300'}`}>{t('zhButton')}</button>
+                                <button onClick={() => setLanguage('en')} className={`px-3 py-1 rounded text-sm border ${language === 'en' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300'}`}>{t('enButton')}</button>
+                            </div>
+
+                            <div className="flex flex-col gap-4 mb-6">
+                                <div className="flex bg-gray-100 p-1 rounded-lg overflow-x-auto">
+                                    {['magnet', 'airplane', 'foldable_magnet', 'card'].map(tab => (
+                                        <button
+                                            key={tab}
+                                            onClick={() => setActiveTab(tab)}
+                                            className={`flex-1 py-2 px-3 text-sm font-medium rounded-md transition-all whitespace-nowrap ${
+                                                activeTab === tab ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                                            }`}
+                                        >
+                                            {tab === 'magnet' && '不可折叠磁吸盒'}
+                                            {tab === 'airplane' && '飞机盒 (平铺)'}
+                                            {tab === 'foldable_magnet' && '可折叠磁吸盒'}
+                                            {tab === 'card' && '卡盒'}
+                                        </button>
+                                    ))}
+                                </div>
+                                
+                                {activeTab !== 'card' && (
+                                    <div className="flex items-center gap-4 bg-blue-50 p-2 rounded-lg border border-blue-100">
+                                        <span className="text-sm font-bold text-gray-700 ml-2">运输方式:</span>
+                                        <div className="flex gap-2">
+                                            <button 
+                                                onClick={() => setShippingMode('sea')}
+                                                className={`px-3 py-1 rounded text-sm ${shippingMode === 'sea' ? 'bg-blue-600 text-white shadow' : 'bg-white text-gray-600 border'}`}
+                                            >
+                                                🚢✈️ 海运/空运 (/6000)
+                                            </button>
+                                            <button 
+                                                onClick={() => setShippingMode('air')}
+                                                className={`px-3 py-1 rounded text-sm ${shippingMode === 'air' ? 'bg-blue-600 text-white shadow' : 'bg-white text-gray-600 border'}`}
+                                            >
+                                                快递 (/5000)
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-2">
+                                {/* ... Magnet & Airplane Inputs (Existing) ... */}
+                                {activeTab === 'magnet' && (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="col-span-2 text-sm font-bold text-gray-700 border-b pb-1">基础尺寸 (CM)</div>
+                                        <InputField label="长 (A2)" value={magInputs.L} onChange={(v)=>setMagInputs({...magInputs, L:v})} unit="cm" />
+                                        <InputField label="宽 (B2)" value={magInputs.W} onChange={(v)=>setMagInputs({...magInputs, W:v})} unit="cm" />
+                                        <InputField label="高 (C2)" value={magInputs.H} onChange={(v)=>setMagInputs({...magInputs, H:v})} unit="cm" />
+                                        <InputField label="数量 (D2)" value={magInputs.Qty} onChange={(v)=>setMagInputs({...magInputs, Qty:v})} unit="pcs" />
+                                        
+                                        {/* Optimization Section */}
+                                        <div className="col-span-2 mt-2 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-sm font-bold text-gray-700">智能装箱参数</span>
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => setShowSettings(!showSettings)} className="text-xs text-blue-600 hover:underline flex items-center gap-1">{showSettings ? '隐藏设置' : '优化限制设置'}</button>
+                                                    <button onClick={handleOptimize} className="btn-shine bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs px-3 py-1 rounded shadow hover:shadow-lg transform active:scale-95 transition-all flex items-center gap-1">开始智能计算</button>
+                                                </div>
+                                            </div>
+                                            {showSettings && (
+                                                <div className="grid grid-cols-2 gap-2 mb-2 p-2 bg-gray-50 rounded border border-gray-100 text-xs animate-fade-in">
+                                                    <InputField label="单箱实重上限" value={constraints.maxWeight} onChange={(v)=>setConstraints({...constraints, maxWeight:v})} unit="kg" />
+                                                    <InputField label="单箱体积重上限" value={constraints.maxVolWeight} onChange={(v)=>setConstraints({...constraints, maxVolWeight:v})} unit="kg" />
+                                                    <InputField label="单箱长度上限" value={constraints.maxL} onChange={(v)=>setConstraints({...constraints, maxL:v})} unit="cm" />
+                                                    <InputField label="单箱宽度上限" value={constraints.maxW} onChange={(v)=>setConstraints({...constraints, maxW:v})} unit="cm" />
+                                                    <InputField label="单箱高度上限" value={constraints.maxH} onChange={(v)=>setConstraints({...constraints, maxH:v})} unit="cm" />
+                                                    <InputField label="单箱计费重下限" value={constraints.minChargeable} onChange={(v)=>setConstraints({...constraints, minChargeable:v})} unit="kg" />
+                                                </div>
+                                            )}
+                                            <div className="grid grid-cols-3 gap-2">
+                                                <InputField label="单箱个数" value={magInputs.PerCarton} onChange={(v)=>setMagInputs({...magInputs, PerCarton:v})} unit="pcs" />
+                                                <InputField label="排数" value={magInputs.Rows} onChange={(v)=>setMagInputs({...magInputs, Rows:v})} unit={t('rowUnit')} />
+                                                <InputField label="列数" value={magInputs.Cols} onChange={(v)=>setMagInputs({...magInputs, Cols:v})} unit={t('colUnit')} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                {activeTab === 'airplane' && (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="col-span-2 text-sm font-bold text-gray-700 border-b pb-1">基础尺寸 (CM)</div>
+                                        <InputField label="长 (A11)" value={airInputs.L} onChange={(v)=>setAirInputs({...airInputs, L:v})} unit="cm" />
+                                        <InputField label="宽 (B11)" value={airInputs.W} onChange={(v)=>setAirInputs({...airInputs, W:v})} unit="cm" />
+                                        <InputField label="高 (C11)" value={airInputs.H} onChange={(v)=>setAirInputs({...airInputs, H:v})} unit="cm" />
+                                        <InputField label="数量 (D11)" value={airInputs.Qty} onChange={(v)=>setAirInputs({...airInputs, Qty:v})} unit="pcs" />
+                                        <div className="col-span-2 mt-2 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-sm font-bold text-gray-700">智能装箱参数</span>
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => setShowSettings(!showSettings)} className="text-xs text-blue-600 hover:underline flex items-center gap-1">{showSettings ? '隐藏设置' : '优化限制设置'}</button>
+                                                    <button onClick={handleOptimize} className="btn-shine bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs px-3 py-1 rounded shadow hover:shadow-lg transform active:scale-95 transition-all flex items-center gap-1">开始智能计算</button>
+                                                </div>
+                                            </div>
+                                            {showSettings && (
+                                                <div className="grid grid-cols-2 gap-2 mb-2 p-2 bg-gray-50 rounded border border-gray-100 text-xs animate-fade-in">
+                                                    <InputField label="单箱实重上限" value={constraints.maxWeight} onChange={(v)=>setConstraints({...constraints, maxWeight:v})} unit="kg" />
+                                                    <InputField label="单箱体积重上限" value={constraints.maxVolWeight} onChange={(v)=>setConstraints({...constraints, maxVolWeight:v})} unit="kg" />
+                                                    <InputField label="单箱长度上限" value={constraints.maxL} onChange={(v)=>setConstraints({...constraints, maxL:v})} unit="cm" />
+                                                    <InputField label="单箱宽度上限" value={constraints.maxW} onChange={(v)=>setConstraints({...constraints, maxW:v})} unit="cm" />
+                                                    <InputField label="单箱高度上限" value={constraints.maxH} onChange={(v)=>setConstraints({...constraints, maxH:v})} unit="cm" />
+                                                    <InputField label="单箱计费重下限" value={constraints.minChargeable} onChange={(v)=>setConstraints({...constraints, minChargeable:v})} unit="kg" />
+                                                </div>
+                                            )}
+                                            <div className="grid grid-cols-3 gap-2">
+                                                <InputField label="单箱个数" value={airInputs.PerCarton} onChange={(v)=>setAirInputs({...airInputs, PerCarton:v})} unit="pcs" />
+                                                <InputField label="排数" value={airInputs.Rows} onChange={(v)=>setAirInputs({...airInputs, Rows:v})} unit={t('rowUnit')} />
+                                                <InputField label="列数" value={airInputs.Cols} onChange={(v)=>setAirInputs({...airInputs, Cols:v})} unit={t('colUnit')} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* NEW: Foldable Magnet Tab */}
+                                {activeTab === 'foldable_magnet' && (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="col-span-2 text-sm font-bold text-gray-700 border-b pb-1">基础尺寸 (CM) - 折叠出货</div>
+                                        <InputField label="长 (A2)" value={foldMagInputs.L} onChange={(v)=>setFoldMagInputs({...foldMagInputs, L:v})} unit="cm" />
+                                        <InputField label="宽 (B2)" value={foldMagInputs.W} onChange={(v)=>setFoldMagInputs({...foldMagInputs, W:v})} unit="cm" />
+                                        <InputField label="高 (C2)" value={foldMagInputs.H} onChange={(v)=>setFoldMagInputs({...foldMagInputs, H:v})} unit="cm" />
+                                        <InputField label="数量 (D2)" value={foldMagInputs.Qty} onChange={(v)=>setFoldMagInputs({...foldMagInputs, Qty:v})} unit="pcs" />
+                                        
+                                        <div className="col-span-2 text-sm font-bold text-gray-700 border-b pb-1 mt-2">材质参数</div>
+                                        <InputField label="面纸 (E2)" value={foldMagInputs.Paper} onChange={(v)=>setFoldMagInputs({...foldMagInputs, Paper:v})} unit="g" />
+                                        <InputField label="纸板 (F2)" value={foldMagInputs.Board} onChange={(v)=>setFoldMagInputs({...foldMagInputs, Board:v})} unit="g" />
+                                        
+                                        <div className="col-span-2 mt-2 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-sm font-bold text-gray-700">智能装箱参数</span>
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => setShowSettings(!showSettings)} className="text-xs text-blue-600 hover:underline flex items-center gap-1">{showSettings ? '隐藏设置' : '优化限制设置'}</button>
+                                                    <button onClick={handleOptimize} className="btn-shine bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs px-3 py-1 rounded shadow hover:shadow-lg transform active:scale-95 transition-all flex items-center gap-1">开始智能计算</button>
+                                                </div>
+                                            </div>
+                                            {showSettings && (
+                                                <div className="grid grid-cols-2 gap-2 mb-2 p-2 bg-gray-50 rounded border border-gray-100 text-xs animate-fade-in">
+                                                    <InputField label="单箱实重上限" value={constraints.maxWeight} onChange={(v)=>setConstraints({...constraints, maxWeight:v})} unit="kg" />
+                                                    <InputField label="单箱体积重上限" value={constraints.maxVolWeight} onChange={(v)=>setConstraints({...constraints, maxVolWeight:v})} unit="kg" />
+                                                    <InputField label="单箱长度上限" value={constraints.maxL} onChange={(v)=>setConstraints({...constraints, maxL:v})} unit="cm" />
+                                                    <InputField label="单箱宽度上限" value={constraints.maxW} onChange={(v)=>setConstraints({...constraints, maxW:v})} unit="cm" />
+                                                    <InputField label="单箱高度上限" value={constraints.maxH} onChange={(v)=>setConstraints({...constraints, maxH:v})} unit="cm" />
+                                                    <InputField label="单箱计费重下限" value={constraints.minChargeable} onChange={(v)=>setConstraints({...constraints, minChargeable:v})} unit="kg" />
+                                                </div>
+                                            )}
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <InputField label="单箱个数 (G2)" value={foldMagInputs.PerCarton} onChange={(v)=>setFoldMagInputs({...foldMagInputs, PerCarton:v})} unit="pcs" />
+                                                <InputField label="单箱排数 (H2)" value={foldMagInputs.Rows} onChange={(v)=>setFoldMagInputs({...foldMagInputs, Rows:v})} unit={t('rowUnit')} />
+                                            </div>
+                                            <div className="col-span-2 text-xs text-gray-500 mt-1">*注：此盒型为单列排布，仅支持调节排数(长)和堆叠层数(高)。</div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {activeTab === 'card' && (
+                                    <div className="grid grid-cols-2 gap-4">
+                                         <div className="col-span-2 text-sm text-yellow-600 bg-yellow-50 p-2 rounded">卡盒模式暂不支持详细内部堆叠可视化，仅显示外箱体积。</div>
+                                        <InputField label="长 (A19)" value={cardInputs.L} onChange={(v)=>setCardInputs({...cardInputs, L:v})} unit="m" step="0.01" />
+                                        <InputField label="宽 (B19)" value={cardInputs.W} onChange={(v)=>setCardInputs({...cardInputs, W:v})} unit="m" step="0.01" />
+                                        <InputField label="高 (C19)" value={cardInputs.H} onChange={(v)=>setCardInputs({...cardInputs, H:v})} unit="m" step="0.01" />
+                                        <InputField label="数量 (D19)" value={cardInputs.Qty} onChange={(v)=>setCardInputs({...cardInputs, Qty:v})} unit="pcs" />
+                                        <InputField label="面纸重" value={cardInputs.Paper} onChange={(v)=>setCardInputs({...cardInputs, Paper:v})} unit="kg" step="0.1" />
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Results */}
+                        <div className="bg-white rounded-xl shadow-lg p-6">
+                            <h2 className="text-lg font-bold text-gray-800 mb-2 border-b pb-2 flex justify-between items-center">
+                                <span>{t('calcResults')}</span>
+                                <button 
+                                    onClick={handleCopy}
+                                    className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1 rounded flex items-center gap-1 transition-colors relative"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                                    {copyFeedback || t('copyInquiry')}
+                                </button>
+                            </h2>
+                             <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                                {activeTab === 'magnet' && (
+                                    <>
+                                        <ResultItem label="单盒重" value={magResults.unitWeight} unit="g" />
+                                        <ResultItem label="单箱实重" value={magResults.cartonGrossWeight} unit="kg" />
+                                        <ResultItem label="单箱长" value={magResults.cartonL} unit="cm" />
+                                        <ResultItem label="单箱宽" value={magResults.cartonW} unit="cm" />
+                                        <ResultItem label="单箱高" value={magResults.cartonH} unit="cm" />
+                                        <ResultItem label="单箱立方" value={magResults.cartonCBM} unit="m³" />
+                                        <ResultItem label="体积重" value={magResults.volWeight} unit="kg" />
+                                        <div className="col-span-2 md:col-span-3 mt-1 grid grid-cols-2 gap-3">
+                                            <ResultItem label="总箱数" value={magResults.cartonCount} unit={t('boxUnit')} highlight />
+                                            <ResultItem label="总体积" value={magResults.totalVolume} unit="m³" highlight />
+                                            <ResultItem label="总实重" value={magResults.totalGrossWeight} unit="kg" highlight extraClass="bg-green-50 border-green-200 text-green-700" />
+                                            <ResultItem label="总体积重" value={magResults.totalVolWeight} unit="kg" highlight extraClass="bg-blue-50 border-blue-200 text-blue-700" />
+                                        </div>
+                                    </>
+                                )}
+                                {activeTab === 'airplane' && (
+                                    <>
+                                        <ResultItem label="单盒重" value={airResults.unitWeight} unit="g" />
+                                        <ResultItem label="单箱实重" value={airResults.cartonGrossWeight} unit="kg" />
+                                        <ResultItem label="单箱长" value={airResults.skinL} unit="cm" />
+                                        <ResultItem label="单箱宽" value={airResults.skinW} unit="cm" />
+                                        <ResultItem label="单箱高" value={airResults.cartonH} unit="cm" />
+                                        <ResultItem label="单箱立方" value={airResults.cartonCBM} unit="m³" />
+                                        <ResultItem label="体积重" value={airResults.volWeight} unit="kg" />
+                                        <div className="col-span-2 md:col-span-3 mt-1 grid grid-cols-2 gap-3">
+                                            <ResultItem label="总箱数" value={airResults.cartonCount} unit={t('boxUnit')} highlight />
+                                            <ResultItem label="总体积" value={airResults.totalVolume} unit="m³" highlight />
+                                            <ResultItem label="总实重" value={airResults.totalGrossWeight} unit="kg" highlight extraClass="bg-green-50 border-green-200 text-green-700" />
+                                            <ResultItem label="总体积重" value={airResults.totalVolWeight} unit="kg" highlight extraClass="bg-blue-50 border-blue-200 text-blue-700" />
+                                        </div>
+                                    </>
+                                )}
+                                {activeTab === 'foldable_magnet' && (
+                                    <>
+                                        <ResultItem label="单盒重" value={foldMagResults.unitWeight} unit="g" />
+                                        <ResultItem label="单箱实重" value={foldMagResults.cartonGrossWeight} unit="kg" />
+                                        <ResultItem label="单箱长" value={foldMagResults.cartonL} unit="cm" />
+                                        <ResultItem label="单箱宽" value={foldMagResults.cartonW} unit="cm" />
+                                        <ResultItem label="单箱高" value={foldMagResults.cartonH} unit="cm" />
+                                        <ResultItem label="单箱立方" value={foldMagResults.cartonCBM} unit="m³" />
+                                        <ResultItem label="体积重" value={foldMagResults.volWeight} unit="kg" />
+                                        <div className="col-span-2 md:col-span-3 mt-1 grid grid-cols-2 gap-3">
+                                            <ResultItem label="总箱数" value={foldMagResults.cartonCount} unit={t('boxUnit')} highlight />
+                                            <ResultItem label="总体积" value={foldMagResults.totalVolume} unit="m³" highlight />
+                                            <ResultItem label="总实重" value={foldMagResults.totalGrossWeight} unit="kg" highlight extraClass="bg-green-50 border-green-200 text-green-700" />
+                                            <ResultItem label="总体积重" value={foldMagResults.totalVolWeight} unit="kg" highlight extraClass="bg-blue-50 border-blue-200 text-blue-700" />
+                                        </div>
+                                    </>
+                                )}
+                                {activeTab === 'card' && (
+                                    <>
+                                        <ResultItem label="单箱长" value={cardResults.cartonL} unit="m" />
+                                        <ResultItem label="单箱宽" value={cardResults.cartonW} unit="m" />
+                                        <ResultItem label="总重量" value={cardResults.totalWeightRaw} unit="kg" />
+                                        <div className="col-span-2 md:col-span-3 mt-1 grid grid-cols-2 gap-3">
+                                            <ResultItem label="箱数" value={cardResults.cartonCount} unit={t('boxUnit')} highlight />
+                                            <ResultItem label="总重" value={cardResults.totalGrossWeight} unit="kg" highlight />
+                                            <ResultItem label="总计费重" value={cardResults.totalChargeableWeight} unit="kg" highlight extraClass="bg-yellow-50 border-yellow-200 text-yellow-700" />
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Right Panel: 3D Visualization */}
+                    <div className="w-full md:w-1/2 flex flex-col">
+                        <div className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col h-auto">
+                            <div className="p-3 border-b flex justify-between items-center bg-gray-50">
+                                <h3 className="font-bold text-gray-700 flex items-center gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-box"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg>
+                                    {t('visualPreview')}
+                                </h3>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-400">{t('previewLegend')}</span>
+                                    <button 
+                                        onClick={() => setIsFullScreen(!isFullScreen)}
+                                        className="text-gray-500 hover:text-blue-600 p-1"
+                                        title={isFullScreen ? t('fullscreenExit') : t('fullscreenEnter')}
+                                    >
+                                        {isFullScreen ? (
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>
+                                        ) : (
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* 3D Canvas Container */}
+                            <div className={`${isFullScreen ? 'fullscreen-canvas' : 'h-80 w-full'} canvas-container relative transition-all duration-300`}>
+                                <Canvas>
+                                    <PackingScene layout={layoutData} />
+                                </Canvas>
+                                
+                                {isFullScreen && (
+                                    <button 
+                                        onClick={() => setIsFullScreen(false)}
+                                        className="absolute top-4 right-4 bg-white/90 p-2 rounded-full shadow-lg hover:bg-white transition-all z-50"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                    </button>
+                                )}
+
+                                <div className="absolute bottom-2 right-2 text-[10px] text-gray-500 bg-white/90 px-2 py-1 rounded border shadow-sm pointer-events-none">
+                                    {t('previewHint')}{isFullScreen && t('previewHintEsc')}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
