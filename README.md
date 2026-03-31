@@ -12,3 +12,8 @@ Highlights in this version:
 - shipping modes are `Sea/Air Freight (/6000)` and `Express (/5000)`
 - full Chinese/English toggle
 - enhanced no-solution diagnostics for single-carton constraint failures
+
+Latest updates:
+- smart-calculation limits now compare carton `length/width/height` one-to-one instead of using sorted edge comparison
+- candidate search bounds now also follow `maxL / maxW / maxH` separately
+- latest detailed record: `更新日志.md`

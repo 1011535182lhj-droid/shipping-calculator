@@ -988,16 +988,14 @@
 
                 const { maxWeight, maxVolWeight, maxL, maxW, maxH, minChargeable } = constraints;
                 const modeText = shippingMode === 'sea' ? t('seaModeName') : t('airModeName');
-                const sortedLimits = [maxL, maxW, maxH].sort((a, b) => b - a);
-                const maxEdgeLimit = sortedLimits[0];
                 const formatMetric = (value) => Number(value.toFixed(3));
 
                 let bestQualified = null;
                 let bestFallback = null;
                 const diagnosticStats = {
-                    minLargestEdge: Infinity,
-                    minMiddleEdge: Infinity,
-                    minSmallestEdge: Infinity,
+                    minLength: Infinity,
+                    minWidth: Infinity,
+                    minHeight: Infinity,
                     minGrossWeight: Infinity,
                     minVolWeight: Infinity,
                 };
@@ -1018,47 +1016,64 @@
                 };
 
                 const updateDiagnosticStats = (result) => {
-                    const sortedDims = [result.cartonL, result.cartonW, result.cartonH].sort((a, b) => b - a);
-                    diagnosticStats.minLargestEdge = Math.min(diagnosticStats.minLargestEdge, sortedDims[0]);
-                    diagnosticStats.minMiddleEdge = Math.min(diagnosticStats.minMiddleEdge, sortedDims[1]);
-                    diagnosticStats.minSmallestEdge = Math.min(diagnosticStats.minSmallestEdge, sortedDims[2]);
+                    diagnosticStats.minLength = Math.min(diagnosticStats.minLength, result.cartonL);
+                    diagnosticStats.minWidth = Math.min(diagnosticStats.minWidth, result.cartonW);
+                    diagnosticStats.minHeight = Math.min(diagnosticStats.minHeight, result.cartonH);
                     diagnosticStats.minGrossWeight = Math.min(diagnosticStats.minGrossWeight, result.cartonGrossWeight);
                     diagnosticStats.minVolWeight = Math.min(diagnosticStats.minVolWeight, result.volWeight);
                 };
 
+                const buildAxisReason = (type, payload) => {
+                    const templates = language === 'en'
+                        ? {
+                            fixedWidth: 'No matter how the single carton is arranged, its fixed width {value}cm exceeds the carton-width limit {limit}cm.',
+                            minLength: 'No matter how the single carton is arranged, its carton length cannot go below {value}cm, which exceeds the carton-length limit {limit}cm.',
+                            minWidth: 'No matter how the single carton is arranged, its carton width cannot go below {value}cm, which exceeds the carton-width limit {limit}cm.',
+                            minHeight: 'No matter how the single carton is arranged, its carton height cannot go below {value}cm, which exceeds the carton-height limit {limit}cm.',
+                        }
+                        : {
+                            fixedWidth: '单箱无论怎么排，单箱固定宽边 {value}cm 超过单箱宽度上限 {limit}cm。',
+                            minLength: '单箱无论怎么排，单箱长度最低也要 {value}cm，超过单箱长度上限 {limit}cm。',
+                            minWidth: '单箱无论怎么排，单箱宽度最低也要 {value}cm，超过单箱宽度上限 {limit}cm。',
+                            minHeight: '单箱无论怎么排，单箱高度最低也要 {value}cm，超过单箱高度上限 {limit}cm。',
+                        };
+
+                    return replaceTemplate(templates[type], payload);
+                };
+
                 const buildNoPlanMessage = () => {
                     const reasons = [];
-                    let hasLargestEdgeReason = false;
+                    let hasWidthReason = false;
 
                     if (activeTab === 'foldable_magnet') {
                         const fixedWidth = foldMagInputs.W * 2 + foldMagInputs.H * 3 + 6;
-                        if (fixedWidth > sortedLimits[0] + 0.001) {
-                            reasons.push(replaceTemplate(t('singleBoxFixedWidthMaxEdge'), {
+                        if (fixedWidth > maxW + 0.001) {
+                            reasons.push(buildAxisReason('fixedWidth', {
                                 value: formatMetric(fixedWidth),
-                                limit: formatMetric(sortedLimits[0]),
+                                limit: formatMetric(maxW),
                             }));
-                            hasLargestEdgeReason = true;
+                            hasWidthReason = true;
                         }
                     }
 
-                    if (!hasLargestEdgeReason && diagnosticStats.minLargestEdge > sortedLimits[0] + 0.001) {
-                        reasons.push(replaceTemplate(t('singleBoxMinLargestExceeded'), {
-                            value: formatMetric(diagnosticStats.minLargestEdge),
-                            limit: formatMetric(sortedLimits[0]),
+                    if (diagnosticStats.minLength > maxL + 0.001) {
+                        reasons.push(buildAxisReason('minLength', {
+                            value: formatMetric(diagnosticStats.minLength),
+                            limit: formatMetric(maxL),
                         }));
                     }
 
-                    if (diagnosticStats.minMiddleEdge > sortedLimits[1] + 0.001) {
-                        reasons.push(replaceTemplate(t('singleBoxMinMiddleExceeded'), {
-                            value: formatMetric(diagnosticStats.minMiddleEdge),
-                            limit: formatMetric(sortedLimits[1]),
+                    if (!hasWidthReason && diagnosticStats.minWidth > maxW + 0.001) {
+                        reasons.push(buildAxisReason('minWidth', {
+                            value: formatMetric(diagnosticStats.minWidth),
+                            limit: formatMetric(maxW),
                         }));
                     }
 
-                    if (diagnosticStats.minSmallestEdge > sortedLimits[2] + 0.001) {
-                        reasons.push(replaceTemplate(t('singleBoxMinSmallestExceeded'), {
-                            value: formatMetric(diagnosticStats.minSmallestEdge),
-                            limit: formatMetric(sortedLimits[2]),
+                    if (diagnosticStats.minHeight > maxH + 0.001) {
+                        reasons.push(buildAxisReason('minHeight', {
+                            value: formatMetric(diagnosticStats.minHeight),
+                            limit: formatMetric(maxH),
                         }));
                     }
 
@@ -1168,12 +1183,11 @@
                 };
 
                 const evaluateCandidate = (result, config) => {
-                    const sortedDims = [result.cartonL, result.cartonW, result.cartonH].sort((a, b) => b - a);
                     updateDiagnosticStats(result);
                     const fitsConstraints =
-                        sortedDims[0] <= sortedLimits[0] &&
-                        sortedDims[1] <= sortedLimits[1] &&
-                        sortedDims[2] <= sortedLimits[2] &&
+                        result.cartonL <= maxL &&
+                        result.cartonW <= maxW &&
+                        result.cartonH <= maxH &&
                         result.cartonGrossWeight <= maxWeight &&
                         result.volWeight <= maxVolWeight;
 
@@ -1192,8 +1206,8 @@
 
                 if (activeTab === 'foldable_magnet') {
                     const { L } = foldMagInputs;
-                    const safeMaxR = Math.max(1, Math.floor((maxEdgeLimit - 6) / L));
-                    const safeMaxS = Math.max(1, Math.floor((maxEdgeLimit - 6) / 0.5));
+                    const safeMaxR = Math.max(1, Math.floor((maxL - 6) / L));
+                    const safeMaxS = Math.max(1, Math.floor((maxH - 6) / 0.5));
 
                     for (let r = 1; r <= safeMaxR; r++) {
                         for (let s = 1; s <= safeMaxS; s++) {
@@ -1206,9 +1220,9 @@
                     }
                 } else if (activeTab === 'magnet') {
                     const { L, W, H } = magInputs;
-                    const safeMaxR = Math.max(1, Math.floor((maxEdgeLimit - 4) / L));
-                    const safeMaxC = Math.max(1, Math.floor((maxEdgeLimit - 4) / W));
-                    const safeMaxS = Math.max(1, Math.floor((maxEdgeLimit - 4) / H));
+                    const safeMaxR = Math.max(1, Math.floor((maxL - 4) / L));
+                    const safeMaxC = Math.max(1, Math.floor((maxW - 4) / W));
+                    const safeMaxS = Math.max(1, Math.floor((maxH - 4) / H));
 
                     for (let r = 1; r <= safeMaxR; r++) {
                         for (let c = 1; c <= safeMaxC; c++) {
@@ -1223,9 +1237,9 @@
                     }
                 } else if (activeTab === 'airplane') {
                     const { L, W } = airInputs;
-                    const safeMaxR = Math.max(1, Math.floor((maxEdgeLimit - 4) / L));
-                    const safeMaxC = Math.max(1, Math.floor((maxEdgeLimit - 4) / W));
-                    const safeMaxCountH = Math.max(1, Math.floor((maxEdgeLimit - 4) / 0.3));
+                    const safeMaxR = Math.max(1, Math.floor((maxL - 4) / L));
+                    const safeMaxC = Math.max(1, Math.floor((maxW - 4) / W));
+                    const safeMaxCountH = Math.max(1, Math.floor((maxH - 4) / 0.3));
 
                     for (let r = 1; r <= safeMaxR; r++) {
                         for (let c = 1; c <= safeMaxC; c++) {
